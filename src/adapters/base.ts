@@ -15,6 +15,19 @@ export abstract class PlatformAdapter {
   abstract isMatch(): boolean;
 
   /**
+   * 根据 URL 检测是否匹配该平台
+   * 用于 popup 等非页面上下文中检测
+   */
+  isMatchUrl(url: string): boolean {
+    try {
+      const hostname = new URL(url).hostname;
+      return hostname === this.hostname;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * 获取对话列表
    * @param page 页码（从 1 开始）
    * @param pageSize 每页数量
@@ -64,6 +77,18 @@ class AdapterRegistry {
   detect(): PlatformAdapter | null {
     for (const adapter of this.adapters.values()) {
       if (adapter.isMatch()) {
+        return adapter;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 根据 URL 检测匹配的适配器（用于 popup 等非页面上下文）
+   */
+  detectByUrl(url: string): PlatformAdapter | null {
+    for (const adapter of this.adapters.values()) {
+      if (adapter.isMatchUrl(url)) {
         return adapter;
       }
     }

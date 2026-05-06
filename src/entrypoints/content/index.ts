@@ -1,5 +1,3 @@
-import { defineContentScript } from 'wxt/sandbox';
-
 export default defineContentScript({
   matches: ['*://chat.deepseek.com/*', '*://chat.openai.com/*', '*://chatgpt.com/*'],
 
@@ -16,9 +14,17 @@ export default defineContentScript({
     window.addEventListener('message', (event) => {
       if (event.source !== window) return;
       if (event.data.type?.startsWith('CONVERSATION_EXPORT_')) {
-        // 转发到 background
         chrome.runtime.sendMessage(event.data);
       }
+    });
+
+    // 响应 PING，让 popup/background 确认 content script 已注入
+    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (message.type === 'PING') {
+        sendResponse({ platform: window.location.hostname });
+        return true;
+      }
+      return false;
     });
   },
 });

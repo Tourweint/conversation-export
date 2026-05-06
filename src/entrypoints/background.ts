@@ -1,5 +1,3 @@
-import { defineBackground } from 'wxt/sandbox';
-
 export default defineBackground(() => {
   console.log('Conversation Export 后台服务已启动');
 
@@ -13,9 +11,8 @@ export default defineBackground(() => {
   });
 
   // 监听来自 content script 的消息
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'GET_PLATFORM_INFO') {
-      // 返回支持的域名列表
       sendResponse({
         platforms: [
           { id: 'deepseek', name: 'DeepSeek', hostname: 'chat.deepseek.com' },

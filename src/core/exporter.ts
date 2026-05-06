@@ -181,9 +181,13 @@ export class Exporter {
       const batchResults = await Promise.all(
         batch.map(async (conv) => {
           try {
-            return await this.adapter.getConversationDetail(conv.id);
+            const detail = await this.adapter.getConversationDetail(conv.id);
+            if (detail.messages.length === 0) {
+              console.warn(`[Exporter] 对话 "${conv.title}" (${conv.id}) 详情获取成功但无消息`);
+            }
+            return detail;
           } catch (error) {
-            console.error(`获取对话 ${conv.id} 详情失败:`, error);
+            console.error(`[Exporter] 获取对话 "${conv.title}" (${conv.id}) 详情失败:`, error);
             // 返回简化版对话（只有基本信息，没有消息）
             return conv;
           }
