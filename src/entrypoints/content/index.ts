@@ -2,13 +2,13 @@ import { defineContentScript } from 'wxt/sandbox';
 
 export default defineContentScript({
   matches: ['*://chat.deepseek.com/*', '*://chat.openai.com/*', '*://chatgpt.com/*'],
-  
+
   main() {
     console.log('Conversation Export: Content script 已加载');
 
-    // 向页面注入脚本以访问页面内部的变量
+    // 向页面注入 API 嗅探脚本
     const script = document.createElement('script');
-    script.src = chrome.runtime.getURL('injected.js');
+    script.src = chrome.runtime.getURL('api-sniffer.js');
     script.onload = () => script.remove();
     (document.head || document.documentElement).appendChild(script);
 

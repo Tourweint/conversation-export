@@ -11,6 +11,12 @@ export default defineConfig({
       'https://chat.openai.com/*',
       'https://chatgpt.com/*',
     ],
+    web_accessible_resources: [
+      {
+        resources: ['api-sniffer.js'],
+        matches: ['<all_urls>'],
+      },
+    ],
   },
   modules: ['@wxt-dev/module-react'],
 });
