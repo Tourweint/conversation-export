@@ -20,32 +20,17 @@ export class Formatter {
   }
 
   /**
-   * 转换为 Markdown 格式
+   * 转换为 Markdown 格式（匹配千问官方导出格式）
    */
   private toMarkdown(conversation: Conversation): string {
-    const lines: string[] = [
-      `# ${conversation.title}`,
-      '',
-      `> 对话 ID: ${conversation.id}`,
-      `> 创建时间: ${this.formatDate(conversation.createdAt)}`,
-      `> 更新时间: ${this.formatDate(conversation.updatedAt)}`,
-      `> 消息数量: ${conversation.messages.length}`,
-      '',
-      '---',
-      '',
-    ];
+    const lines: string[] = [];
 
     for (const message of conversation.messages) {
-      const roleLabel = this.getRoleLabel(message.role);
-      const timestamp = this.formatDate(message.timestamp);
-      
       lines.push(
-        `## ${roleLabel} <small>${timestamp}</small>`,
+        `## ${message.role}`,
         '',
         message.content,
         '',
-        '---',
-        ''
       );
     }
 

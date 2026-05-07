@@ -420,9 +420,11 @@ function App() {
       await exp.export(dateRange, format);
     } catch (err) {
       setProgress({ current: 0, total: 0, status: 'error', message: String(err) });
+    } finally {
+      // 确保无论成功失败，状态都会重置
+      setIsExporting(false);
+      setExporter(null);
     }
-    setIsExporting(false);
-    setExporter(null);
   };
 
   const isIdle = progress.status === 'idle';
@@ -450,7 +452,7 @@ function App() {
             backgroundColor: detectedPlatform ? '#10b981' : '#f97316',
           }}
         />
-        {detectedPlatform ? `已连接 ${detectedPlatform}` : '请在 DeepSeek 或 ChatGPT 页面使用'}
+        {detectedPlatform ? `已连接 ${detectedPlatform}` : '请在 DeepSeek、ChatGPT、Kimi 或千问页面使用'}
       </div>
 
       {/* Date Range */}

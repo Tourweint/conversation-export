@@ -153,7 +153,7 @@ export class Exporter {
 
       // 限速：每页之间延迟 500ms
       if (hasMore) {
-        await this.sleep(500);
+        await this.sleep(500, signal);
       }
     }
 
@@ -168,8 +168,9 @@ export class Exporter {
     signal: AbortSignal
   ): Promise<Conversation[]> {
     const results: Conversation[] = [];
-    const batchSize = 5; // 每批 5 个
-    const delayMs = 1000; // 每批间隔 1 秒
+    const batchSize = 3; // 每批 3 个，减少并发
+    const delayMs = 1500; // 每批间隔 1.5 秒
+    let hasError = false;
 
     for (let i = 0; i < conversations.length; i += batchSize) {
       if (signal.aborted) {
@@ -178,34 +179,45 @@ export class Exporter {
 
       const batch = conversations.slice(i, i + batchSize);
       
-      const batchResults = await Promise.all(
-        batch.map(async (conv) => {
-          try {
-            const detail = await this.adapter.getConversationDetail(conv.id);
-            if (detail.messages.length === 0) {
-              console.warn(`[Exporter] 对话 "${conv.title}" (${conv.id}) 详情获取成功但无消息`);
-            }
-            return detail;
-          } catch (error) {
-            console.error(`[Exporter] 获取对话 "${conv.title}" (${conv.id}) 详情失败:`, error);
-            // 返回简化版对话（只有基本信息，没有消息）
-            return conv;
+      // 串行处理而不是并行，避免卡死
+      for (let j = 0; j < batch.length; j++) {
+        const conv = batch[j];
+        if (signal.aborted) {
+          throw new Error('AbortError');
+        }
+
+        const currentIndex = i + j + 1;
+
+        try {
+          // 更新进度：开始获取当前对话
+          this.updateProgress({
+            current: currentIndex,
+            total: conversations.length,
+            status: 'fetching_detail',
+            message: `正在获取 "${conv.title}" 的消息... (${currentIndex}/${conversations.length})`,
+          });
+
+          const detail = await this.adapter.getConversationDetail(conv.id);
+          if (detail.messages.length === 0) {
+            console.warn(`[Exporter] 对话 "${conv.title}" (${conv.id}) 详情获取成功但无消息`);
           }
-        })
-      );
+          results.push(detail);
+        } catch (error) {
+          console.error(`[Exporter] 获取对话 "${conv.title}" (${conv.id}) 详情失败:`, error);
+          hasError = true;
+          // 继续处理其他对话，不中断流程
+          results.push(conv);
+        }
 
-      results.push(...batchResults);
-
-      this.updateProgress({
-        current: Math.min(i + batchSize, conversations.length),
-        total: conversations.length,
-        status: 'fetching_detail',
-        message: `正在获取对话详情 (${Math.min(i + batchSize, conversations.length)}/${conversations.length})...`,
-      });
+        // 每个对话之间添加小延迟
+        if (j < batch.length - 1) {
+          await this.sleep(300, signal);
+        }
+      }
 
       // 限速
       if (i + batchSize < conversations.length) {
-        await this.sleep(delayMs);
+        await this.sleep(delayMs, signal);
       }
     }
 
@@ -220,9 +232,15 @@ export class Exporter {
   }
 
   /**
-   * 延迟
+   * 延迟（支持中断）
    */
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  private sleep(ms: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, ms);
+      signal.addEventListener('abort', () => {
+        clearTimeout(timer);
+        reject(new Error('AbortError'));
+      }, { once: true });
+    });
   }
 }
