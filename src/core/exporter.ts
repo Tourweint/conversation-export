@@ -143,7 +143,7 @@ export class Exporter {
       const filtered = batch.filter(conv => isInRange(conv.createdAt, dateRange));
       
       // 如果这一页的所有对话都在范围外，且是按时间倒序的，可以停止
-      if (filtered.length === 0 && batch[0].createdAt < (dateRange.start || new Date(0))) {
+      if (filtered.length === 0 && batch[0].createdAt && (dateRange.start || new Date(0)) && batch[0].createdAt < (dateRange.start || new Date(0))) {
         hasMore = false;
         break;
       }
@@ -197,13 +197,30 @@ export class Exporter {
             message: `正在获取 "${conv.title}" 的消息... (${currentIndex}/${conversations.length})`,
           });
 
-          const detail = await this.adapter.getConversationDetail(conv.id);
+          // 优先使用 fillConversationDetail（如果适配器支持），避免重复获取对话列表
+          const detail = 'fillConversationDetail' in this.adapter
+            ? await (this.adapter as any).fillConversationDetail(conv)
+            : await this.adapter.getConversationDetail(conv.id);
+
           if (detail.messages.length === 0) {
             console.warn(`[Exporter] 对话 "${conv.title}" (${conv.id}) 详情获取成功但无消息`);
           }
           results.push(detail);
         } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
           console.error(`[Exporter] 获取对话 "${conv.title}" (${conv.id}) 详情失败:`, error);
+
+          // 签名缺失：停止后续所有处理，直接报错
+          if (errorMsg.includes('缺少签名')) {
+            this.updateProgress({
+              current: currentIndex,
+              total: conversations.length,
+              status: 'error',
+              message: '缺少签名：请先在千问页面打开一个对话，确保浏览器扩展能捕获签名后再导出',
+            });
+            throw error;
+          }
+
           hasError = true;
           // 继续处理其他对话，不中断流程
           results.push(conv);

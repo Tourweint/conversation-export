@@ -116,32 +116,37 @@ export class QwenAdapter extends PlatformAdapter {
 
   /**
    * 从 content script 获取捕获的签名信息
+   * 查找所有千问相关的标签页，不限于活跃标签
    */
   private async getSignHeadersFromPage(): Promise<Record<string, string>> {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) return {};
+      // 查找所有千问相关的标签页
+      const tabs = await chrome.tabs.query({ url: ['*://www.qianwen.com/*', '*://qianwen.com/*'] });
+      
+      for (const tab of tabs) {
+        if (!tab?.id) continue;
 
-      // 先发送 PING 检查 content script 是否就绪
-      try {
-        const pingResponse = await chrome.tabs.sendMessage(tab.id, { type: 'PING' });
-        console.log('[Qwen] Content script 就绪:', pingResponse);
-      } catch {
-        console.warn('[Qwen] Content script 未就绪，请刷新页面后重试');
-        return {};
+        // 先发送 PING 检查 content script 是否就绪
+        try {
+          const pingResponse = await chrome.tabs.sendMessage(tab.id, { type: 'PING' });
+          console.log('[Qwen] Content script 就绪 (tab:', tab.id, '):', pingResponse);
+        } catch {
+          console.warn('[Qwen] Content script 未就绪 (tab:', tab.id, ')');
+          continue;
+        }
+
+        // 向 content script 请求最新签名
+        const response = await chrome.tabs.sendMessage(tab.id, {
+          type: 'GET_QWEN_SIGNATURE',
+        }) as { signature: { headers: Record<string, string> } | null };
+
+        if (response?.signature?.headers) {
+          console.log('[Qwen] 从 content script 获取到签名:', Object.keys(response.signature.headers));
+          return response.signature.headers;
+        }
       }
 
-      // 向 content script 请求最新签名
-      const response = await chrome.tabs.sendMessage(tab.id, {
-        type: 'GET_QWEN_SIGNATURE',
-      }) as { signature: { headers: Record<string, string> } | null };
-
-      if (response?.signature?.headers) {
-        console.log('[Qwen] 从 content script 获取到签名:', Object.keys(response.signature.headers));
-        return response.signature.headers;
-      }
-
-      console.warn('[Qwen] Content script 中没有可用的签名，请先点击一个对话');
+      console.warn('[Qwen] 所有千问标签页中都没有可用的签名，请先在千问页面点击一个对话');
       return {};
     } catch (error) {
       console.warn('[Qwen] 获取签名失败:', error);
@@ -279,17 +284,20 @@ export class QwenAdapter extends PlatformAdapter {
    * 使用从 content script 捕获的签名来绕过验证
    */
   async getConversationDetail(id: string): Promise<Conversation> {
-    const allConversations = await this.getAllConversations();
-    const conversation = allConversations.find(c => c.id === id);
-
-    if (!conversation) {
-      throw new Error(`未找到对话: ${id}`);
-    }
+    // 注意：不再重复调用 getAllConversations()，由调用方提供基本信息
+    // 通过 id 构造一个基本的 Conversation，再获取消息
+    const conversation: Conversation = {
+      id,
+      title: '', // 标题由调用方已有的数据填充
+      createdAt: null,
+      updatedAt: null,
+      messages: [],
+    };
 
     // 尝试使用捕获的签名获取消息
     const messages = await this.getAllMessagesWithCapturedSign(id);
 
-    console.log(`[Qwen] getConversationDetail 完成: ${conversation.title}, 消息数: ${messages.length}`);
+    console.log(`[Qwen] getConversationDetail 完成: ${id}, 消息数: ${messages.length}`);
 
     return {
       ...conversation,
@@ -298,7 +306,20 @@ export class QwenAdapter extends PlatformAdapter {
   }
 
   /**
+   * 用已有对话信息填充详情
+   */
+  async fillConversationDetail(conv: Conversation): Promise<Conversation> {
+    const messages = await this.getAllMessagesWithCapturedSign(conv.id);
+    console.log(`[Qwen] fillConversationDetail 完成: ${conv.title}, 消息数: ${messages.length}`);
+    return {
+      ...conv,
+      messages,
+    };
+  }
+
+  /**
    * 使用捕获的签名获取消息列表
+   * 签名不可用时尝试回退到基础认证
    */
   private async getAllMessagesWithCapturedSign(sessionId: string): Promise<Message[]> {
     const pageSize = 10;
@@ -306,20 +327,20 @@ export class QwenAdapter extends PlatformAdapter {
     let page = 1;
     let hasMore = true;
     let retryCount = 0;
-    const maxRetries = 2;
+    const maxRetries = 3;
     const maxPages = 50; // 最多获取 50 页
     const seenContents = new Set<string>(); // 用于去重
     let lastPos: number | undefined = undefined; // 用于分页
 
     // 获取捕获的签名头
-    const signHeaders = await this.getSignHeadersFromPage();
+    let signHeaders = await this.getSignHeadersFromPage();
 
     if (Object.keys(signHeaders).length === 0) {
-      console.warn('[Qwen] 没有可用的签名，无法获取消息详情');
-      return [];
+      console.error('[Qwen] 没有可用的签名，无法获取消息详情。请先在千问页面打开一个对话。');
+      throw new Error('缺少签名：请先在千问页面打开一个对话，确保浏览器扩展能捕获签名后再导出');
     }
 
-    console.log(`[Qwen] 开始使用签名获取对话 ${sessionId} 的消息...`);
+    console.log(`[Qwen] 开始获取对话 ${sessionId} 的消息...`);
 
     while (hasMore && retryCount < maxRetries && page <= maxPages) {
       const url = new URL(`${this.baseUrl}/api/v1/session/msg/list`);
@@ -348,12 +369,21 @@ export class QwenAdapter extends PlatformAdapter {
       url.searchParams.set('include_pos', 'true'); // 启用 pos 字段用于分页
 
       try {
+        // 每 5 页刷新一次签名，避免签名过期
+        if (page > 1 && page % 5 === 1) {
+          const freshSign = await this.getSignHeadersFromPage();
+          if (Object.keys(freshSign).length > 0) {
+            signHeaders = freshSign;
+            console.log(`[Qwen] 刷新签名成功`);
+          }
+        }
+
         // 使用捕获的签名头
         const baseHeaders = await this.buildHeaders();
 
         // 添加超时控制
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒超时
 
         const response = await fetch(url.toString(), {
           method: 'GET',
@@ -368,6 +398,20 @@ export class QwenAdapter extends PlatformAdapter {
         clearTimeout(timeoutId);
 
         if (!response.ok) {
+          // 签名过期（401/403），尝试刷新签名后重试
+          if (response.status === 401 || response.status === 403) {
+            console.warn(`[Qwen] 签名可能已过期 (HTTP ${response.status})，尝试刷新...`);
+            const freshSign = await this.getSignHeadersFromPage();
+            if (Object.keys(freshSign).length > 0) {
+              signHeaders = freshSign;
+              retryCount++; // 计入重试但不放弃
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              continue;
+            }
+            // 刷新签名也失败了，说明签名彻底不可用，停止处理
+            console.error('[Qwen] 签名过期且无法刷新，停止获取消息');
+            throw new Error('缺少签名：签名已过期且无法刷新，请重新在千问页面点击一个对话后再试');
+          }
           throw new Error(`HTTP ${response.status}`);
         }
 
@@ -544,6 +588,10 @@ export class QwenAdapter extends PlatformAdapter {
   /**
    * 解析单个消息项
    * 一个 item 包含用户的 request 和 AI 的 response
+   * 
+   * 支持两种 API 格式：
+   * - 新格式：response_messages（mime_type 标识内容类型）
+   * - 旧格式：qwen_response_messages（contentType 标识内容类型）
    */
   private parseMessageItem(item: QwenMessageItem): Message[] {
     const messages: Message[] = [];
@@ -552,45 +600,143 @@ export class QwenAdapter extends PlatformAdapter {
     // 解析用户消息
     if (Array.isArray(item.request_messages)) {
       for (const req of item.request_messages) {
-        if (req.mime_type === 'text/plain' && req.content) {
-          messages.push({
-            role: 'user',
-            content: this.cleanContent(req.content),
-            timestamp,
-          });
+        if (req.content) {
+          // 用户消息：接受 text/plain 和其他文本类型
+          if (req.mime_type === 'text/plain' || req.mime_type.startsWith('text/')) {
+            messages.push({
+              role: 'user',
+              content: this.cleanContent(req.content),
+              timestamp,
+            });
+          }
         }
       }
     }
 
-    // 解析 AI 回复
+    // 解析 AI 回复：优先新格式 response_messages，回退旧格式 qwen_response_messages
     if (Array.isArray(item.response_messages)) {
-      let assistantContent = '';
-
-      for (const resp of item.response_messages) {
-        // 只保留 AI 的主要回复内容，跳过参考资料
-        if (resp.content) {
-          // text/plain: 纯文本
-          // multi_load/iframe: 主要回复内容（核心答案）
-          // thinking/iframe: 思考过程
-          if (resp.mime_type === 'text/plain' ||
-              resp.mime_type === 'multi_load/iframe' ||
-              resp.mime_type === 'thinking/iframe') {
-            assistantContent += (assistantContent ? '\n' : '') + resp.content;
-          }
-          // 注意：跳过 bar/iframe（参考资料/搜索结果）
-        }
-      }
-
-      if (assistantContent) {
-        messages.push({
-          role: 'assistant',
-          content: this.cleanContent(assistantContent),
-          timestamp,
-        });
-      }
+      this.parseNewResponseMessages(item.response_messages, timestamp, messages);
+    } else if (Array.isArray((item as Record<string, unknown>).qwen_response_messages)) {
+      this.parseOldResponseMessages(
+        (item as unknown as { qwen_response_messages: QwenOldResponseMessage[] }).qwen_response_messages,
+        timestamp,
+        messages
+      );
     }
 
     return messages;
+  }
+
+  /**
+   * 解析新格式 response_messages（mime_type 标识内容类型）
+   */
+  private parseNewResponseMessages(
+    responseMessages: QwenResponseMessage[],
+    timestamp: Date | null,
+    messages: Message[]
+  ): void {
+    let mainContent = '';
+    let thinkingContent = '';
+
+    for (const resp of responseMessages) {
+      if (!resp.content) continue;
+
+      // 明确跳过的 mime_type：bar/iframe（参考资料/搜索结果）
+      if (resp.mime_type === 'bar/iframe') continue;
+
+      // 思考过程单独处理
+      if (resp.mime_type === 'thinking/iframe') {
+        thinkingContent += (thinkingContent ? '\n' : '') + resp.content;
+        continue;
+      }
+
+      // 主回复内容：接受所有非排除的 mime_type
+      mainContent += (mainContent ? '\n' : '') + resp.content;
+    }
+
+    // 组合内容：先思考过程，再主回复
+    let assistantContent = '';
+    if (thinkingContent) {
+      assistantContent = `## 思考过程\n\n${this.cleanContent(thinkingContent)}\n\n## 回复\n\n`;
+    }
+    assistantContent += mainContent;
+
+    if (assistantContent.trim()) {
+      messages.push({
+        role: 'assistant',
+        content: this.cleanContent(assistantContent),
+        timestamp,
+      });
+    }
+  }
+
+  /**
+   * 解析旧格式 qwen_response_messages（contentType 标识内容类型）
+   * 
+   * 旧格式结构：
+   * - role: "assistant" | "plugin"
+   * - contentType: "text" | "plugin" | "think"
+   * - content: 文本内容
+   * - status: "finished" 等
+   */
+  private parseOldResponseMessages(
+    qwenResponseMessages: QwenOldResponseMessage[],
+    timestamp: Date | null,
+    messages: Message[]
+  ): void {
+    let mainContent = '';
+    let thinkingContent = '';
+
+    for (const resp of qwenResponseMessages) {
+      if (!resp.content) continue;
+
+      // 跳过插件调用（搜索结果等），只保留 text 和 think
+      if (resp.contentType === 'plugin') continue;
+
+      // 思考过程
+      if (resp.contentType === 'think') {
+        // think 内容可能是 JSON 字符串 {"content":"..."}
+        const thinkText = this.extractThinkContent(resp.content);
+        thinkingContent += (thinkingContent ? '\n' : '') + thinkText;
+        continue;
+      }
+
+      // 主回复内容（contentType === "text" 及其他未知的）
+      if (resp.role === 'assistant' || resp.contentType === 'text') {
+        mainContent += (mainContent ? '\n' : '') + resp.content;
+      }
+    }
+
+    // 组合内容：先思考过程，再主回复
+    let assistantContent = '';
+    if (thinkingContent) {
+      assistantContent = `## 思考过程\n\n${this.cleanContent(thinkingContent)}\n\n## 回复\n\n`;
+    }
+    assistantContent += mainContent;
+
+    if (assistantContent.trim()) {
+      messages.push({
+        role: 'assistant',
+        content: this.cleanContent(assistantContent),
+        timestamp,
+      });
+    }
+  }
+
+  /**
+   * 从旧格式 think 消息中提取实际思考内容
+   * think 的 content 可能是 JSON 字符串 {"content":"..."} 或纯文本
+   */
+  private extractThinkContent(content: string): string {
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed && typeof parsed.content === 'string') {
+        return parsed.content;
+      }
+    } catch {
+      // 不是 JSON，直接作为纯文本返回
+    }
+    return content;
   }
 
   /**
@@ -645,11 +791,20 @@ export class QwenAdapter extends PlatformAdapter {
   }
 
   /**
-   * 解析时间戳（千问使用毫秒级 Unix 时间戳）
+   * 获取对话创建时间（用于排序等场景，null 会被视为极早时间）
    */
-  private parseTimestamp(ts: number | undefined): Date {
-    if (!ts) return new Date();
-    return new Date(ts);
+  private getSafeDate(date: Date | null): Date {
+    return date || new Date(0);
+  }
+
+  /**
+   * 解析时间戳（千问使用毫秒级 Unix 时间戳）
+   * 返回 null 表示时间未知，而非默认为当前时间
+   */
+  private parseTimestamp(ts: number | undefined): Date | null {
+    if (!ts) return null;
+    const date = new Date(ts);
+    return isNaN(date.getTime()) ? null : date;
   }
 }
 
@@ -697,7 +852,19 @@ interface QwenMessageItem {
   req_id: string;
   created_at: number;
   request_messages: QwenRequestMessage[];
-  response_messages: QwenResponseMessage[];
+  response_messages?: QwenResponseMessage[];
+  // 旧格式字段（千问 2025年12月之前的对话）
+  qwen_response_messages?: QwenOldResponseMessage[];
+  // 其他字段
+  extra_info?: Record<string, unknown>;
+  request_timestamp?: number;
+  response_timestamp?: number;
+  error_code?: number;
+  error_msg?: string;
+  pos?: string;
+  communication?: Record<string, unknown>;
+  event?: string;
+  message_extra?: string;
 }
 
 interface QwenRequestMessage {
@@ -716,6 +883,22 @@ interface QwenResponseMessage {
     sources?: QwenSource[];
     [key: string]: unknown;
   };
+}
+
+/**
+ * 旧格式 AI 回复消息（千问 2025年12月之前的对话）
+ * 使用 contentType 替代 mime_type，role 字段标识消息角色
+ */
+interface QwenOldResponseMessage {
+  role: 'assistant' | 'plugin';
+  id: string;
+  incremental: boolean;
+  contentType: 'text' | 'plugin' | 'think';
+  content: string;
+  status: string;
+  pluginName?: string;
+  pluginCode?: string;
+  cardCode?: string;
 }
 
 interface QwenSource {

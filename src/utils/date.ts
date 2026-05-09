@@ -3,7 +3,10 @@ import type { DateRange } from '@/types';
 /**
  * 检查日期是否在范围内
  */
-export function isInRange(date: Date, range: DateRange): boolean {
+export function isInRange(date: Date | null, range: DateRange): boolean {
+  // 没有日期信息的对话，默认包含在范围内（避免误过滤）
+  if (!date) return true;
+  
   // 只比较日期部分，忽略时间
   const dateOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   
@@ -33,7 +36,8 @@ export function isInRange(date: Date, range: DateRange): boolean {
 /**
  * 格式化日期为 YYYY-MM-DD
  */
-export function formatDate(date: Date): string {
+export function formatDate(date: Date | null): string {
+  if (!date) return '未知日期';
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');

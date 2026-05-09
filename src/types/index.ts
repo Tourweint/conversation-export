@@ -5,14 +5,14 @@
 export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
-  timestamp: Date;
+  timestamp: Date | null;
 }
 
 export interface Conversation {
   id: string;
   title: string;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: Date | null;
+  updatedAt: Date | null;
   messages: Message[];
 }
 

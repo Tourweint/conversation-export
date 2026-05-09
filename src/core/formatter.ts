@@ -20,18 +20,36 @@ export class Formatter {
   }
 
   /**
-   * 转换为 Markdown 格式（匹配千问官方导出格式）
+   * 转换为 Markdown 格式
    */
   private toMarkdown(conversation: Conversation): string {
     const lines: string[] = [];
 
+    // 对话标题
+    lines.push(`# ${conversation.title}`);
+    lines.push('');
+
+    // 对话元信息
+    if (conversation.createdAt) {
+      lines.push(`> 创建时间: ${this.formatDate(conversation.createdAt)}`);
+    }
+    if (conversation.updatedAt) {
+      lines.push(`> 更新时间: ${this.formatDate(conversation.updatedAt)}`);
+    }
+    if (conversation.createdAt || conversation.updatedAt) {
+      lines.push('');
+    }
+
+    lines.push('---');
+    lines.push('');
+
     for (const message of conversation.messages) {
-      lines.push(
-        `## ${message.role}`,
-        '',
-        message.content,
-        '',
-      );
+      const roleLabel = this.getRoleLabel(message.role);
+      const timeStr = message.timestamp ? ` (${this.formatDate(message.timestamp)})` : '';
+      lines.push(`### ${roleLabel}${timeStr}`);
+      lines.push('');
+      lines.push(message.content);
+      lines.push('');
     }
 
     return lines.join('\n');
@@ -44,12 +62,12 @@ export class Formatter {
     const data = {
       id: conversation.id,
       title: conversation.title,
-      createdAt: conversation.createdAt.toISOString(),
-      updatedAt: conversation.updatedAt.toISOString(),
+      createdAt: conversation.createdAt ? conversation.createdAt.toISOString() : null,
+      updatedAt: conversation.updatedAt ? conversation.updatedAt.toISOString() : null,
       messages: conversation.messages.map(msg => ({
         role: msg.role,
         content: msg.content,
-        timestamp: msg.timestamp.toISOString(),
+        timestamp: msg.timestamp ? msg.timestamp.toISOString() : null,
       })),
     };
 
@@ -71,7 +89,8 @@ export class Formatter {
   /**
    * 格式化日期
    */
-  private formatDate(date: Date): string {
+  private formatDate(date: Date | null): string {
+    if (!date) return '未知时间';
     return date.toLocaleString('zh-CN', {
       year: 'numeric',
       month: '2-digit',

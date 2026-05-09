@@ -13,7 +13,7 @@ export class Downloader {
   downloadSingle(conversation: Conversation, format: ExportFormat): void {
     const content = formatter.format(conversation, format);
     const extension = format === 'markdown' ? 'md' : 'json';
-    const filename = this.sanitizeFilename(`${conversation.title}.${extension}`);
+    const filename = this.sanitizeFilename(`${this.getDatePrefix(conversation)}${conversation.title}.${extension}`);
     
     this.downloadFile(content, filename, format);
   }
@@ -38,7 +38,7 @@ export class Downloader {
     for (let i = 0; i < conversations.length; i++) {
       const conversation = conversations[i];
       const content = formatter.format(conversation, format);
-      const filename = this.sanitizeFilename(`${conversation.title}.${extension}`);
+      const filename = this.sanitizeFilename(`${this.getDatePrefix(conversation)}${conversation.title}.${extension}`);
       
       // 处理重名文件
       const uniqueFilename = this.getUniqueFilename(folder, filename);
@@ -78,6 +78,19 @@ export class Downloader {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  }
+
+  /**
+   * 获取文件名的日期前缀（优先用 updatedAt，其次 createdAt）
+   * 格式：2024-01-15_ 或者空字符串（无日期时）
+   */
+  private getDatePrefix(conversation: Conversation): string {
+    const date = conversation.updatedAt || conversation.createdAt;
+    if (!date) return '';
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}_`;
   }
 
   /**
